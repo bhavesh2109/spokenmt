@@ -4,6 +4,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+
 from xml.dom import minidom
 import nltk
 import math
@@ -20,8 +25,15 @@ END_TOKEN = 'SENT_END'
 
 # Load data
 print 'Loading XML file...'
+
+# Get French text
 xmldoc = minidom.parse('ted_fr-20160408.xml')
 print 'Getting French text...'
+
+# Get English text
+# xmldoc = minidom.parse('ted_en-20160408.xml')
+# print 'Getting English text...'
+
 textList = xmldoc.getElementsByTagName('content')
 print 'Number of transcripts:', len(textList)
 # print textList[0].childNodes[0].nodeValue
@@ -53,7 +65,7 @@ for s in textList[:NUM_TRANSCRIPTS]:
     sentenceList += tokenized_sents
 
 # Use only some of the sentences in vocabulary
-NUM_SENTENCES = 20000
+NUM_SENTENCES = 30000
 print 'Taking only', NUM_SENTENCES, 'sentences...'
 sentenceList = sentenceList[:NUM_SENTENCES]
 
@@ -74,7 +86,7 @@ print 'Size of vocabulary:', len(word_to_index)
 EMBEDDING_DIM = 32
 HIDDEN_DIM = 100
 VOCAB_SIZE = len(word_to_index)
-MAX_LENGTH
+MAX_LENGTH = 50
 
 # Prepare sequences for LSTM input and output
 X_data = []
@@ -115,10 +127,21 @@ def writeDataToFile(writeData=False):
 
 
 # Convert sequence to Torch Tensor and return it in Variable wrapper
-def seq_tensor(seq):
+def seq2Tensor(seq):
     tensor = torch.LongTensor(seq).view(-1, 1)
     return autograd.Variable(tensor)
 
+# Convert training sequences to Torch Tensors
+def list2Variables(training_list):
+
+    training_pairs = []
+    for list_in, list_out in training_list:
+        var_in = seq2Tensor(list_in)
+        var_out = seq2Tensor(list_out)
+        training_pairs.append((var_in, var_out))
+
+    return training_pairs
+        
 
 # LM encoder
 class LMEncoder(nn.Module):
@@ -187,15 +210,140 @@ def train(input_variable, target_variable, encoder, decoder, enc_optim, dec_opti
 
     encoder_outputs = autograd.Variable(torch.zeros(max_length, encoder.hidden_size))
 
+    # print 'New training instance'
+    # print 'Input length:', input_length
+    # print 'Target length:', target_length
+
     loss = 0
 
     for ei in range(input_length):
+        if ei == max_length:
+            break
         encoder_output, encoder_hidden = encoder(input_variable[ei], encoder_hidden)
+        # print 'Encoder output size:', encoder_output.size(), 'Encoder hidden size:', encoder_hidden.size()
         encoder_outputs[ei] = encoder_output[0][0]
 
-    decoder_input = autograd.Variable(torch.LongTensor([[word_to_index[START_TOKEN]]]))
+    decoder_input = autograd.Variable(torch.LongTensor([word_to_index[START_TOKEN]]))
 
     decoder_hidden = encoder_hidden
 
     for di in range(target_length):
-        decoder_output, d
+        decoder_output, decoder_hidden = decoder(decoder_input, decoder_hidden)
+        # print 'Decoder input size:', decoder_input.size(), 'Decoder output size:', decoder_output.size(), 'Decoder hidden size:', decoder_hidden.size()
+        loss += criterion(decoder_output, target_variable[di])
+        decoder_input = target_variable[di]
+
+    # print '--------------------------------'
+    loss.backward()
+
+    enc_optim.step()
+    dec_optim.step()
+
+    return loss.data[0]/target_length
+
+def trainIters(encoder, decoder, num_iters, print_every=100, plot_every=100, learning_rate=0.01):
+
+    encoder_optim = optim.SGD(encoder.parameters(), lr=learning_rate)
+    decoder_optim = optim.SGD(decoder.parameters(), lr=learning_rate)
+
+    plot_loss_total = 0
+    plot_losses = []
+
+    training_pairs = list2Variables(training_data[:TRAINING_SIZE])
+    criterion = nn.NLLLoss()
+
+    for iter in range(1, num_iters+1):
+
+        training_pair = training_pairs[iter-1]
+        input_var = training_pair[0]
+        output_var = training_pair[1]
+
+        loss = train(input_var, output_var, encoder, decoder, encoder_optim, decoder_optim, criterion)
+        plot_loss_total += loss
+
+        if iter % print_every == 0:
+            print 'Iteration:', iter, 'Loss:', loss, 'total loss:', plot_loss_total
+
+        if iter % plot_every == 0:
+            plot_loss_avg = plot_loss_total/plot_every
+            plot_losses.append(plot_loss_avg)
+            plot_loss_total = 0
+
+    evaluate(encoder, decoder)
+
+    # showPlot(plot_losses)
+
+def evaluate(encoder, decoder, max_length=MAX_LENGTH):
+
+    testing_pairs = list2Variables(training_data[TRAINING_SIZE:TRAINING_SIZE+TESTING_SIZE])
+
+    log_prob_sum = 0
+    total_seq_len = 0
+    encoder_hidden = encoder.initHidden()
+
+    print 'Evaluating model...'
+
+    for i in range(TESTING_SIZE):
+
+        if i % 100 == 0:
+            print 'Sentence number', i
+
+        word_prob_sum = 0
+
+        testing_pair = testing_pairs[i]
+        input_var = testing_pair[0]
+        target_var = testing_pair[1]
+
+        input_length = input_var.size()[0]
+        target_length = target_var.size()[0]
+
+        encoder_outputs = autograd.Variable(torch.zeros(max_length, encoder.hidden_size))
+
+        # print 'New training instance'
+        # print 'Input length:', input_length
+        # print 'Target length:', target_length
+
+        loss = 0
+
+        for ei in range(input_length):
+            if ei == max_length:
+                break
+            encoder_output, encoder_hidden = encoder(input_var[ei], encoder_hidden)
+            # print 'Encoder output size:', encoder_output.size(), 'Encoder hidden size:', encoder_hidden.size()
+            encoder_outputs[ei] = encoder_output[0][0]
+
+        decoder_input = autograd.Variable(torch.LongTensor([word_to_index[START_TOKEN]]))
+
+        decoder_hidden = encoder_hidden
+
+        for di in range(target_length):
+            decoder_output, decoder_hidden = decoder(decoder_input, decoder_hidden)
+            # print 'Decoder input size:', decoder_input.size(), 'Decoder output size:', decoder_output.size(), 'Decoder hidden size:', decoder_hidden.size()
+            # print 'Target variable:', (target_var[di])
+            # print 'Target variable val:', (target_var[di].data)[0]
+            # print 'target log prob:', (decoder_output.data)[0][(target_var[di].data)[0]]
+            word_prob_sum += (decoder_output.data)[0][(target_var[di].data)[0]]
+            decoder_input = target_var[di]
+
+        total_seq_len += target_length
+        log_prob_sum += word_prob_sum
+
+    log_prob_mean = -1.0*log_prob_sum/total_seq_len
+    print log_prob_mean
+
+    perplexity = math.exp(log_prob_mean)
+    print 'Perplexity:', perplexity
+
+
+def showPlot(points):
+
+    plt.figure()
+    fig, ax = plt.subplots()
+    loc = ticker.MultipleLocator(0.2)
+    ax.yaxis.set_major_locator(loc)
+    plt.plot(points) 
+
+encoder = LMEncoder(VOCAB_SIZE, HIDDEN_DIM)
+decoder = LMDecoder(HIDDEN_DIM, VOCAB_SIZE)
+
+trainIters(encoder, decoder, TRAINING_SIZE)
