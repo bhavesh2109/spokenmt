@@ -20,8 +20,16 @@ END_TOKEN = 'SENT_END'
 
 # Load data
 print 'Loading XML file...'
-xmldoc = minidom.parse('ted_fr-20160408.xml')
-print 'Getting French text...'
+
+# Get French text
+# xmldoc = minidom.parse('ted_fr-20160408.xml')
+# print 'Getting French text...'
+
+# Get English text
+xmldoc = minidom.parse('ted_en-20160408.xml')
+print 'Getting English text...'
+
+
 textList = xmldoc.getElementsByTagName('content')
 print 'Number of transcripts:', len(textList)
 # print textList[0].childNodes[0].nodeValue
@@ -53,7 +61,7 @@ for s in textList[:NUM_TRANSCRIPTS]:
     sentenceList += tokenized_sents
 
 # Use only some of the sentences in vocabulary
-NUM_SENTENCES = 30000
+NUM_SENTENCES = 50000
 print 'Taking only', NUM_SENTENCES, 'sentences...'
 sentenceList = sentenceList[:NUM_SENTENCES]
 
@@ -71,7 +79,7 @@ print 'Size of vocabulary:', len(word_to_index)
 # print len(index_to_word)
 
 # Define some constants
-EMBEDDING_DIM = 32
+EMBEDDING_DIM = 64
 HIDDEN_DIM = 100
 VOCAB_SIZE = len(word_to_index)
 
@@ -157,34 +165,42 @@ model = LSTMLangModel(EMBEDDING_DIM, HIDDEN_DIM, VOCAB_SIZE, 0)
 loss_function = nn.NLLLoss()
 optimizer = optim.SGD(model.parameters(), lr=0.01)
 
-print 'Training model...'
-for epoch in range(1):
+model_pkl_file = 'lm_vanilla_model_params.pkl'
+train_model = True
 
-    print 'epoch', epoch
-    i = 0
-    for seq_in, seq_out in training_data[:TRAINING_SIZE]:
+if train_model is False:
+    model.load_state_dict(torch.load(model_pkl_file))    
+else:
+    print 'Training model...'
+    for epoch in range(1):
 
-        if i % 100 == 0:
-            print 'Sentence number', i
-        i += 1
+        print 'epoch', epoch
+        i = 0
+        for seq_in, seq_out in training_data[:TRAINING_SIZE]:
 
-        # Clear the pytorch gradients
-        model.zero_grad()
+            if i % 100 == 0:
+                print 'Sentence number', i
+            i += 1
 
-        # clear out the model's hidden state
-        model.hidden = model.initHidden()
+            # Clear the pytorch gradients
+            model.zero_grad()
 
-        # Convert sequences to tensors and wrap in Variable
-        in_var = seq_tensor(seq_in)
-        out_var = seq_tensor(seq_out)
+            # clear out the model's hidden state
+            model.hidden = model.initHidden()
 
-        # Forward pass
-        words_scores = model(in_var)
+            # Convert sequences to tensors and wrap in Variable
+            in_var = seq_tensor(seq_in)
+            out_var = seq_tensor(seq_out)
 
-        # Calculate loss and backprop gradients
-        loss = loss_function(words_scores, out_var)
-        loss.backward()
-        optimizer.step()
+            # Forward pass
+            words_scores = model(in_var)
+
+            # Calculate loss and backprop gradients
+            loss = loss_function(words_scores, out_var)
+            loss.backward()
+            optimizer.step()
+
+    torch.save(model.state_dict(), model_pkl_file)
 
 log_prob_sum = 0
 total_seq_len = 0
